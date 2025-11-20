@@ -7,7 +7,7 @@ from pygame import Rect
 SAVE_FILE = "save.json"
 WIDTH, HEIGHT = 800, 600
 FPS = 60
-AUTO_SAVE_INTERVAL = 10.0  # секунд — промежуточное автосохранение
+AUTO_SAVE_INTERVAL = 10.0 
 
 #сохранения/загрузки
 def load_state():
@@ -123,7 +123,7 @@ def main():
 
     running = True
     last_time = time.time()
-    accrual_accumulator = 0.0  # для плавного начисления пассива
+    accrual_accumulator = 0.0 
     AUTO_SAVE_INTERVAL = 10.0
 
     while running:
