@@ -1,0 +1,262 @@
+import pygame
+import json
+import os
+import time
+from pygame import Rect
+
+SAVE_FILE = "save.json"
+WIDTH, HEIGHT = 800, 600
+FPS = 60
+AUTO_SAVE_INTERVAL = 10.0  # секунд — промежуточное автосохранение
+
+#сохранения/загрузки
+def load_state():
+    if not os.path.exists(SAVE_FILE):
+        return None
+    try:
+        with open(SAVE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data
+    except Exception as e:
+        print("Не удалось загрузить прогресс:", e)
+        return None
+
+def save_state(state):
+    try:
+        with open(SAVE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print("Ошибка сохранения:", e)
+
+#состояния игры 
+class GameState:
+    def __init__(self):
+        # основные переменные
+        self.points = 0.0
+        self.click_value = 1.0
+        self.passive_per_sec = 0.0
+
+        # апгрейды
+        self.click_upgrade_level = 0
+        self.passive_upgrade_level = 0
+        self.click_upgrade_cost = 50.0
+        self.passive_upgrade_cost = 100.0
+
+        self.last_save_time = time.time()
+
+    def to_dict(self):
+        return {
+            "points": self.points,
+            "click_value": self.click_value,
+            "passive_per_sec": self.passive_per_sec,
+            "click_upgrade_level": self.click_upgrade_level,
+            "passive_upgrade_level": self.passive_upgrade_level,
+            "click_upgrade_cost": self.click_upgrade_cost,
+            "passive_upgrade_cost": self.passive_upgrade_cost,
+        }
+
+    def load_from_dict(self, d):
+        try:
+            self.points = float(d.get("points", 0.0))
+            self.click_value = float(d.get("click_value", 1.0))
+            self.passive_per_sec = float(d.get("passive_per_sec", 0.0))
+            self.click_upgrade_level = int(d.get("click_upgrade_level", 0))
+            self.passive_upgrade_level = int(d.get("passive_upgrade_level", 0))
+            self.click_upgrade_cost = float(d.get("click_upgrade_cost", 50.0))
+            self.passive_upgrade_cost = float(d.get("passive_upgrade_cost", 100.0))
+        except Exception as e:
+            print("Ошибка чтения состояния:", e)
+
+# элементы
+class Button:
+    def __init__(self, rect: Rect, text, font, bg=(200,200,200)):
+        self.rect = rect
+        self.text = text
+        self.font = font
+        self.bg = bg
+        self.hover = False
+
+    def draw(self, surf):
+        color = (220, 220, 220) if self.hover else self.bg
+        pygame.draw.rect(surf, color, self.rect, border_radius=12)
+        pygame.draw.rect(surf, (100,100,100), self.rect, 3, border_radius=12)
+        txt = self.font.render(self.text, True, (10,10,10))
+        tx, ty = txt.get_size()
+        surf.blit(txt, (self.rect.x + (self.rect.w - tx)//2, self.rect.y + (self.rect.h - ty)//2))
+
+    def is_hover(self, pos):
+        self.hover = self.rect.collidepoint(pos)
+        return self.hover
+
+    def is_clicked(self, pos):
+        return self.rect.collidepoint(pos)
+
+#игра 
+def main():
+    pygame.init()
+    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    pygame.display.set_caption("Clicker — Кликай и улучшайся")
+    clock = pygame.time.Clock()
+
+    # шрифты
+    font_big = pygame.font.SysFont(None, 48)
+    font_md = pygame.font.SysFont(None, 32)
+    font_sm = pygame.font.SysFont(None, 24)
+
+    # Загрузка состояния
+    state = GameState()
+    saved = load_state()
+    if saved:
+        state.load_from_dict(saved)
+
+    # Кнопки
+    big_btn_rect = Rect((WIDTH//2 - 120, HEIGHT//2 - 120, 240, 240))
+    big_button = Button(big_btn_rect, "КЛИК", font_big, bg=(180,230,255))
+
+    click_upgrade_rect = Rect(50, 150, 300, 80)
+    passive_upgrade_rect = Rect(50, 260, 300, 80)
+    reset_rect = Rect(50, 400, 140, 50)
+
+    click_upgrade_button = Button(click_upgrade_rect, "", font_sm, bg=(220,220,220))
+    passive_upgrade_button = Button(passive_upgrade_rect, "", font_sm, bg=(220,220,220))
+    reset_button = Button(reset_rect, "Сброс", font_sm, bg=(255,200,200))
+
+    running = True
+    last_time = time.time()
+    accrual_accumulator = 0.0  # для плавного начисления пассива
+    AUTO_SAVE_INTERVAL = 10.0
+
+    while running:
+        now = time.time()
+        dt = now - last_time
+        last_time = now
+
+        # пасивный доход 
+        accrual_accumulator += state.passive_per_sec * dt
+        if accrual_accumulator >= 1.0:
+            to_add = int(accrual_accumulator)
+            state.points += to_add
+            accrual_accumulator -= to_add
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                # сохраняем при выходе
+                save_state(state.to_dict())
+                running = False
+
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                pos = event.pos
+                if big_button.is_clicked(pos):
+                    state.points += state.click_value
+
+                # апгрейд клика
+                elif click_upgrade_button.is_clicked(pos):
+                    if state.points >= state.click_upgrade_cost:
+                        state.points -= state.click_upgrade_cost
+                        state.click_upgrade_level += 1
+                        # рост click value (пример: +50% от текущего)
+                        state.click_value += max(1.0, state.click_value * 0.5)
+                        # удорожание апгрейда
+                        state.click_upgrade_cost *= 1.6
+                        # округлить цену
+                        state.click_upgrade_cost = round(state.click_upgrade_cost, 2)
+
+                # апгрейд пассива
+                elif passive_upgrade_button.is_clicked(pos):
+                    if state.points >= state.passive_upgrade_cost:
+                        state.points -= state.passive_upgrade_cost
+                        state.passive_upgrade_level += 1
+                        # рост пассивного дохода (пример: +1 монета в сек)
+                        state.passive_per_sec += 1.0
+                        state.passive_upgrade_cost *= 1.7
+                        state.passive_upgrade_cost = round(state.passive_upgrade_cost, 2)
+
+                # сброс прогресса
+                elif reset_button.is_clicked(pos):
+                    # подтверждение простое — удержание клавиши Shift при клике не требуется, просто чистим
+                    state = GameState()
+                    # удаляем файл сохранения, если есть
+                    try:
+                        if os.path.exists(SAVE_FILE):
+                            os.remove(SAVE_FILE)
+                    except:
+                        pass
+
+            elif event.type == pygame.MOUSEMOTION:
+                pos = event.pos
+                big_button.is_hover(pos)
+                click_upgrade_button.is_hover(pos)
+                passive_upgrade_button.is_hover(pos)
+                reset_button.is_hover(pos)
+
+            elif event.type == pygame.KEYDOWN:
+                # быстрая клавиша сохранения: S
+                if event.key == pygame.K_s:
+                    save_state(state.to_dict())
+
+        # автосохранение периодически
+        if time.time() - state.last_save_time > AUTO_SAVE_INTERVAL:
+            save_state(state.to_dict())
+            state.last_save_time = time.time()
+
+        #отрисовка
+        screen.fill((245,245,250))
+
+        #счёт
+        title = font_md.render("Clicker — нажимай и покупай улучшения", True, (20,20,20))
+        screen.blit(title, (20, 20))
+
+        pts_text = font_big.render(f"{int(state.points)}", True, (10,10,40))
+        pts_label = font_sm.render("Очки:", True, (10,10,40))
+        screen.blit(pts_label, (WIDTH - 200, 20))
+        screen.blit(pts_text, (WIDTH - 200, 50))
+
+        # кнопка клика
+        big_button.text = f"+{int(state.click_value)}"
+        big_button.draw(screen)
+
+        # Инфо о пассиве
+        passive_label = font_sm.render(f"Пассив: {state.passive_per_sec:.1f} / сек", True, (10,10,10))
+        screen.blit(passive_label, (WIDTH - 260, 120))
+
+        # Кнопки улучшений: тексты динамические
+        click_upgrade_button.text = f"Увеличить клик (уровень {state.click_upgrade_level})\nЦена: {int(state.click_upgrade_cost)}"
+        pygame.draw.rect(screen, (230,230,230), click_upgrade_rect, border_radius=10)
+        pygame.draw.rect(screen, (100,100,100), click_upgrade_rect, 2, border_radius=10)
+        txt1 = font_sm.render(f"Увеличить клик (ур. {state.click_upgrade_level})", True, (10,10,10))
+        txt2 = font_sm.render(f"Цена: {int(state.click_upgrade_cost)}", True, (10,10,10))
+        screen.blit(txt1, (click_upgrade_rect.x + 12, click_upgrade_rect.y + 8))
+        screen.blit(txt2, (click_upgrade_rect.x + 12, click_upgrade_rect.y + 42))
+
+        pygame.draw.rect(screen, (230,230,230), passive_upgrade_rect, border_radius=10)
+        pygame.draw.rect(screen, (100,100,100), passive_upgrade_rect, 2, border_radius=10)
+        txt1 = font_sm.render(f"Пасивный доход (ур. {state.passive_upgrade_level})", True, (10,10,10))
+        txt2 = font_sm.render(f"Цена: {int(state.passive_upgrade_cost)}", True, (10,10,10))
+        screen.blit(txt1, (passive_upgrade_rect.x + 12, passive_upgrade_rect.y + 8))
+        screen.blit(txt2, (passive_upgrade_rect.x + 12, passive_upgrade_rect.y + 42))
+
+        # Кнопка сброса
+        reset_button.draw(screen)
+
+        # Подсказки внизу
+        hint = font_sm.render("S — сохранить сейчас | Прогресс автосохраняется каждые 10 секунд", True, (80,80,80))
+        screen.blit(hint, (20, HEIGHT - 30))
+
+        # затемнение кнопки апгрейда
+        if state.points < state.click_upgrade_cost:
+            pygame.draw.rect(screen, (0,0,0,40), click_upgrade_rect, 0)  # не кросс-платформенная прозрачность, но просто перебивает
+            s = pygame.Surface((click_upgrade_rect.w, click_upgrade_rect.h), pygame.SRCALPHA)
+            s.fill((255,255,255,120))
+            screen.blit(s, (click_upgrade_rect.x, click_upgrade_rect.y))
+        if state.points < state.passive_upgrade_cost:
+            s = pygame.Surface((passive_upgrade_rect.w, passive_upgrade_rect.h), pygame.SRCALPHA)
+            s.fill((255,255,255,120))
+            screen.blit(s, (passive_upgrade_rect.x, passive_upgrade_rect.y))
+
+        pygame.display.flip()
+        clock.tick(FPS)
+
+    pygame.quit()
+
+if __name__ == "__main__":
+    main()
