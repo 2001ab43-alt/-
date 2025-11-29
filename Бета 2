@@ -1,0 +1,193 @@
+import pygame
+import json
+import os
+import time
+
+pygame.init()
+
+WIDTH, HEIGHT = 1000, 650
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Кликер")
+
+font = pygame.font.SysFont("arial", 32)
+small_font = pygame.font.SysFont("arial", 22)
+
+SAVE_FILE = "save.json"
+save_message_timer = 0
+last_autosave = time.time()
+
+#Загрузка сохранения
+def load_save():
+    default = {
+        "score": 0,
+        "per_click": 1,
+        "passive": 0
+    }
+    if not os.path.exists(SAVE_FILE):
+        return default
+    try:
+        with open(SAVE_FILE, "r") as f:
+            data = json.load(f)
+        for k in default:
+            if k not in data:
+                data[k] = default[k]
+        return data
+    except:
+        return default
+
+#Сохраниение
+
+def save(data):
+    global save_message_timer
+    with open(SAVE_FILE, "w") as f:
+        json.dump(data, f)
+    save_message_timer = 120  # 2 секунды
+
+
+data = load_save()
+score = data["score"]
+per_click = data["per_click"]
+passive = data["passive"]
+
+clock = pygame.time.Clock()
+shop_open = False
+passive_timer = 0
+
+# Улучшения
+click_upgrades = [
+    ("Монетка (+1 клик)", 1, 50),
+    ("Копилка (+2 клика)", 2, 120),
+    ("Монетный двор (+3 клика)", 3, 240),
+    ("Золотой запас (+4 клика)", 4, 400),
+]
+
+passive_upgrades = [
+    ("Касса (+1/сек)", 1, 100),
+    ("Банк (+2/сек)", 2, 250),
+    ("Инвестфонд (+3/сек)", 3, 500),
+    ("ЦБ РФ (+4/сек)", 4, 900),
+]
+
+
+def draw_button(text, x, y, w, h, active=True):
+    color = (180, 180, 180) if active else (130, 130, 130)
+    pygame.draw.rect(screen, color, (x, y, w, h), border_radius=10)
+    label = small_font.render(text, True, (0, 0, 0))
+    screen.blit(label, (x + w//2 - label.get_width()//2,
+                        y + h//2 - label.get_height()//2))
+    return pygame.Rect(x, y, w, h)
+
+
+running = True
+while running:
+    dt = clock.tick(60)
+    passive_timer += dt
+
+    # пассивный доход
+    if passive_timer >= 1000:
+        score += passive
+        passive_timer = 0
+
+    # автосохранение
+    if time.time() - last_autosave >= 10:
+        save({
+            "score": score,
+            "per_click": per_click,
+            "passive": passive
+        })
+        last_autosave = time.time()
+
+    screen.fill((255, 255, 255))
+
+    # инфо о сохранении
+    if save_message_timer > 0:
+        save_message_timer -= 1
+        screen.blit(small_font.render("Сохранено!", True, (0, 150, 0)), (20, HEIGHT - 70))
+
+    #подсказки
+    screen.blit(small_font.render("Автосохранение каждые 10 секунд", True, (0, 0, 0)), (20, HEIGHT - 40))
+    screen.blit(small_font.render("Нажмите ESC чтобы сохранить вручную", True, (0, 0, 0)), (20, HEIGHT - 20))
+
+    #ГЛАВНОЕ ОКНО
+    if not shop_open:
+        title = font.render("Кликер", True, (0, 0, 0))
+        screen.blit(title, (WIDTH//2 - title.get_width()//2, 20))
+
+        screen.blit(small_font.render(f"Очки: {score}", True, (0, 0, 0)), (20, 80))
+        screen.blit(small_font.render(f"Доход за клик: {per_click}", True, (0, 0, 0)), (20, 120))
+        screen.blit(small_font.render(f"Пассивный доход: {passive}/сек", True, (0, 0, 0)), (20, 160))
+
+        collect_btn = draw_button("РУБЛЬ", WIDTH//2 - 120, HEIGHT//2 - 90, 240, 160)
+        shop_btn = draw_button("МАГАЗИН", WIDTH - 220, 20, 200, 60)
+
+    else:
+        screen.blit(font.render("МАГАЗИН", True, (0, 0, 0)),
+                    (WIDTH//2 - 80, 20))
+
+        btn_y = 120
+
+        click_btns = []
+        for name, val, cost in click_upgrades:
+            active = score >= cost
+            rect = draw_button(f"{name} — {cost}р", 80, btn_y, 380, 60, active)
+            click_btns.append((rect, val, cost))
+            btn_y += 70
+
+        btn_y = 120
+        passive_btns = []
+        for name, val, cost in passive_upgrades:
+            active = score >= cost
+            rect = draw_button(f"{name} — {cost}р", 540, btn_y, 380, 60, active)
+            passive_btns.append((rect, val, cost))
+            btn_y += 70
+
+        back_btn = draw_button("НАЗАД", WIDTH - 220, 20, 200, 60)
+
+    #СОБЫТИЯ
+    for e in pygame.event.get():
+
+        if e.type == pygame.QUIT:
+            save({
+                "score": score,
+                "per_click": per_click,
+                "passive": passive
+            })
+            running = False
+
+        if e.type == pygame.KEYDOWN:
+            if e.key == pygame.K_ESCAPE:
+                save({
+                    "score": score,
+                    "per_click": per_click,
+                    "passive": passive
+                })
+
+        if e.type == pygame.MOUSEBUTTONDOWN:
+            mx, my = pygame.mouse.get_pos()
+
+            if not shop_open:
+                if collect_btn.collidepoint(mx, my):
+                    score += per_click
+
+                if shop_btn.collidepoint(mx, my):
+                    shop_open = True
+
+            else:
+                if back_btn.collidepoint(mx, my):
+                    shop_open = False
+
+                # улучшения клика
+                for rect, val, cost in click_btns:
+                    if rect.collidepoint(mx, my) and score >= cost:
+                        score -= cost
+                        per_click += val
+
+                # пассивные улучшения
+                for rect, val, cost in passive_btns:
+                    if rect.collidepoint(mx, my) and score >= cost:
+                        score -= cost
+                        passive += val
+
+    pygame.display.update()
+
+pygame.quit()
