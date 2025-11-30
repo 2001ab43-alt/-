@@ -1,0 +1,326 @@
+import pygame
+import json
+import os
+import time
+import random
+
+pygame.init()
+
+# ОКНО
+WIDTH, HEIGHT = 1100, 700
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Кликер — Рублёвый Мастер")
+
+# Шрифты
+FONT = pygame.font.SysFont("Segoe UI", 34)
+FONT_MED = pygame.font.SysFont("Segoe UI", 26)
+FONT_SMALL = pygame.font.SysFont("Segoe UI", 20)
+CLOCK = pygame.time.Clock()
+
+# Сохранение
+SAVE_FILE = "save.json"
+AUTOSAVE_INTERVAL = 10  # секунд
+
+# Сохранение / загрузка
+def load_save():
+    default = {
+        "score": 0,
+        "per_click": 1,
+        "passive": 0,
+        "click_costs": [],
+        "passive_costs": []
+    }
+    if not os.path.exists(SAVE_FILE):
+        return default
+    try:
+        with open(SAVE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for key, val in default.items():
+            data.setdefault(key, val)
+        return data
+    except Exception:
+        return default
+
+def save_game(state):
+    try:
+        with open(SAVE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+    except Exception as e:
+        print("Ошибка сохранения:", e)
+
+# Градиент фона
+def draw_gradient_bg():
+    top = (242, 242, 247)
+    bottom = (232, 240, 255)
+    for i in range(HEIGHT):
+        t = i / HEIGHT
+        r = int(top[0] * (1-t) + bottom[0] * t)
+        g = int(top[1] * (1-t) + bottom[1] * t)
+        b = int(top[2] * (1-t) + bottom[2] * t)
+        pygame.draw.line(screen, (r, g, b), (0, i), (WIDTH, i))
+
+# Панели и кнопки
+def draw_panel(x, y, w, h, radius=16):
+    shadow = pygame.Surface((w, h), pygame.SRCALPHA)
+    pygame.draw.rect(shadow, (0,0,0,25), (0, 6, w, h-6), border_radius=radius)
+    screen.blit(shadow, (x, y))
+    pygame.draw.rect(screen, (255,255,255), (x, y, w, h), border_radius=radius)
+
+def draw_button(x, y, w, h, text, enabled=True, accent=False):
+    mx, my = pygame.mouse.get_pos()
+    hover = (x <= mx <= x+w and y <= my <= y+h)
+    if not enabled:
+        base = (170,170,180)
+        text_c = (40,40,40)
+    else:
+        if accent:
+            base = (76,139,245) if not hover else (47,109,225)
+            text_c = (255,255,255)
+        else:
+            base = (230,230,235) if not hover else (210,210,220)
+            text_c = (30,30,30)
+
+    # тень
+    shadow_surf = pygame.Surface((w, h), pygame.SRCALPHA)
+    pygame.draw.rect(shadow_surf, (0,0,0,30), (0, 6, w, h-6), border_radius=12)
+    screen.blit(shadow_surf, (x, y))
+
+    pygame.draw.rect(screen, base, (x, y, w, h), border_radius=12)
+    txt = FONT_MED.render(text, True, text_c)
+    screen.blit(txt, (x + w//2 - txt.get_width()//2, y + h//2 - txt.get_height()//2))
+
+    return pygame.Rect(x, y, w, h)
+
+# Монеты-партиклы (декоративные)
+class Coin:
+    def __init__(self, x, y):
+        self.x = x + random.uniform(-30,30)
+        self.y = y + random.uniform(-10,10)
+        self.vx = random.uniform(-2,2)
+        self.vy = random.uniform(-5,-2)
+        self.life = random.randint(30, 60)
+        self.size = random.randint(6, 10)
+
+    def update(self):
+        self.vy += 0.2
+        self.x += self.vx
+        self.y += self.vy
+        self.life -= 1
+
+    def draw(self):
+        pygame.draw.circle(screen, (255,220,0), (int(self.x), int(self.y)), self.size)
+        pygame.draw.circle(screen, (180,150,0), (int(self.x), int(self.y)), max(1, self.size-3))
+
+coins = []
+
+# Улучшения
+click_upgrades = [
+    {"name": "Монетка (+1)", "val": 1, "cost": 50},
+    {"name": "Копилка (+2)", "val": 2, "cost": 120},
+    {"name": "Монетный двор (+3)", "val": 3, "cost": 240},
+    {"name": "Золотой запас (+4)", "val": 4, "cost": 400},
+]
+
+passive_upgrades = [
+    {"name": "Касса (+1/сек)", "val": 1, "cost": 100},
+    {"name": "Банк (+2/сек)", "val": 2, "cost": 250},
+    {"name": "Инвестфонд (+3/сек)", "val": 3, "cost": 500},
+    {"name": "ЦБ РФ (+4/сек)", "val": 4, "cost": 900},
+]
+
+COST_GROW = 1.4
+
+# Загрузка состояния
+state = load_save()
+score = int(state.get("score", 0))
+per_click = int(state.get("per_click", 1))
+passive = int(state.get("passive", 0))
+
+# подхват изменённых цен из сохранения
+if state.get("click_costs"):
+    for i, c in enumerate(state["click_costs"]):
+        if i < len(click_upgrades):
+            click_upgrades[i]["cost"] = c
+if state.get("passive_costs"):
+    for i, c in enumerate(state["passive_costs"]):
+        if i < len(passive_upgrades):
+            passive_upgrades[i]["cost"] = c
+
+# Игровые переменные
+shop_open = False
+passive_timer = 0.0
+last_autosave = time.time()
+save_msg_timer = 0
+
+def do_save():
+    global save_msg_timer
+    data = {
+        "score": score,
+        "per_click": per_click,
+        "passive": passive,
+        "click_costs": [u["cost"] for u in click_upgrades],
+        "passive_costs": [u["cost"] for u in passive_upgrades],
+    }
+    save_game(data)
+    save_msg_timer = 120  
+
+# Партиклы
+CLICK_PARTICLE_COUNT = 4 
+PASSIVE_PARTICLE_COUNT = 3
+
+#спавн частиц
+def spawn_particles(x, y, count):
+    for _ in range(count):
+        coins.append(Coin(x, y))
+
+# Основной цикл
+running = True
+while running:
+    dt = CLOCK.tick(60)
+    passive_timer += dt / 1000.0
+
+    # пассивный доход каждую секунду
+    if passive_timer >= 1.0:
+        if passive > 0:
+            score += passive
+            # немного декоративных монет при пассиве
+            for _ in range(PASSIVE_PARTICLE_COUNT):
+                spawn_particles(WIDTH//2, HEIGHT//2, 1)
+        passive_timer -= 1.0
+
+    # автосохранение
+    if time.time() - last_autosave >= AUTOSAVE_INTERVAL:
+        do_save()
+        last_autosave = time.time()
+
+    # события
+    clicked = False
+    for ev in pygame.event.get():
+        if ev.type == pygame.QUIT:
+            do_save()
+            running = False
+        elif ev.type == pygame.KEYDOWN:
+            if ev.key == pygame.K_ESCAPE:
+                do_save()
+        elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+            clicked = True
+            mx, my = ev.pos
+
+    # интерфейс
+    draw_gradient_bg()
+    draw_panel(20, 20, WIDTH-40, 80)
+    screen.blit(FONT.render("Кликер — Рублёвый Мастер", True, (30,30,40)), (40, 28))
+
+    draw_panel(20, 120, 300, 150)
+    screen.blit(FONT_MED.render(f"Баланс: {score} р", True, (20,20,30)), (40, 135))
+    screen.blit(FONT_MED.render(f"За клик: {per_click} р", True, (20,20,30)), (40, 165))
+    screen.blit(FONT_MED.render(f"Пассивно: {passive} р/сек", True, (20,20,30)), (40, 195))
+
+    # сообщение о сохранении слева внизу
+    if save_msg_timer > 0:
+        save_msg_timer -= 1
+        screen.blit(FONT_SMALL.render("Сохранено!", True, (0,120,0)), (20, HEIGHT - 40))
+    screen.blit(FONT_SMALL.render("Автосохранение каждые 10 секунд", True, (40,40,40)), (20, HEIGHT - 70))
+    screen.blit(FONT_SMALL.render("ESC — сохранить вручную", True, (40,40,40)), (20, HEIGHT - 48))
+
+    if not clicked:
+        mx, my = pygame.mouse.get_pos()
+
+    click_rect = None
+    shop_rect = None
+    back_rect = None
+
+    if not shop_open:
+        # большая центральная кнопка "РУБЛЬ"
+        click_rect = draw_button(WIDTH//2 - 150, HEIGHT//2 - 140, 300, 280, "РУБЛЬ", enabled=True, accent=True)
+        shop_rect = draw_button(WIDTH - 200, 20, 180, 60, "МАГАЗИН")
+        # обработка клика по центру
+        if clicked and click_rect.collidepoint(mx, my):
+            score += per_click
+            spawn_particles(WIDTH//2, HEIGHT//2, CLICK_PARTICLE_COUNT)
+            pygame.time.delay(100)
+        if clicked and shop_rect.collidepoint(mx, my):
+            shop_open = True
+            pygame.time.delay(120)
+
+    else:
+        # магазин
+        draw_panel(40, 120, WIDTH-80, HEIGHT-160)
+        screen.blit(FONT.render("МАГАЗИН", True, (20,20,30)), (WIDTH//2 - 80, 130))
+        back_rect = draw_button(WIDTH - 200, 20, 180, 60, "НАЗАД")
+
+        # настройки колонок
+        start_y = 190
+        gap = 82
+
+        # левая колонка — кликовые апгрейды
+        left_x = 80
+        panel_w = 430
+        buy_w = 120
+        buy_x = left_x + panel_w + 12  # кнопка покупки справа от панели
+
+        click_buttons = []
+        for i, u in enumerate(click_upgrades):
+            y = start_y + i * gap
+            draw_panel(left_x, y, panel_w, 68)
+            screen.blit(FONT_MED.render(u["name"], True, (30,30,30)), (left_x + 14, y + 8))
+            screen.blit(FONT_SMALL.render(f"{u['cost']}р", True, (50,50,60)), (left_x + panel_w - 60, y + 10))
+            btn = draw_button(buy_x, y, buy_w, 68, "КУПИТЬ", enabled=(score >= u["cost"]))
+            click_buttons.append((btn, i))
+
+        # правая колонка — пассивные апгрейды
+        right_x = buy_x + buy_w + 40  # небольшой отступ
+        panel_w2 = 430
+        buy_x2 = right_x + panel_w2 + 12
+        if buy_x2 + 120 > WIDTH - 20:
+            right_x = left_x + panel_w + 20
+            panel_w2 = 420
+            buy_x2 = right_x + panel_w2 + 12
+
+        passive_buttons = []
+        for i, u in enumerate(passive_upgrades):
+            y = start_y + i * gap
+            draw_panel(right_x, y, panel_w2, 68)
+            screen.blit(FONT_MED.render(u["name"], True, (30,30,30)), (right_x + 14, y + 8))
+            screen.blit(FONT_SMALL.render(f"{u['cost']}р", True, (50,50,60)), (right_x + panel_w2 - 60, y + 10))
+            btn = draw_button(buy_x2, y, buy_w, 68, "КУПИТЬ", enabled=(score >= u["cost"]))
+            passive_buttons.append((btn, i))
+
+        if clicked:
+            if back_rect and back_rect.collidepoint(mx, my):
+                shop_open = False
+                pygame.time.delay(120)
+            else:
+                # кликовые апгрейды
+                for rect, idx in click_buttons:
+                    if rect.collidepoint(mx, my):
+                        u = click_upgrades[idx]
+                        if score >= u["cost"]:
+                            score -= u["cost"]
+                            per_click += u["val"]
+                            u["cost"] = max(1, int(u["cost"] * COST_GROW))
+                            do_save()
+                            spawn_particles(left_x + 40, start_y + idx*gap + 20, 6)
+                            pygame.time.delay(120)
+                # пассивные апгрейды
+                for rect, idx in passive_buttons:
+                    if rect.collidepoint(mx, my):
+                        u = passive_upgrades[idx]
+                        if score >= u["cost"]:
+                            score -= u["cost"]
+                            passive += u["val"]
+                            u["cost"] = max(1, int(u["cost"] * COST_GROW))
+                            do_save()
+                            spawn_particles(right_x + 40, start_y + idx*gap + 20, 6)
+                            pygame.time.delay(120)
+
+    # обновляем партиклы (монеты)
+    for c in coins[:]:
+        c.update()
+        c.draw()
+        if c.life <= 0 or c.y > HEIGHT + 50:
+            coins.remove(c)
+
+    pygame.display.flip()
+
+pygame.quit()
